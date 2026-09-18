@@ -10,13 +10,14 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 from aiogram.fsm.storage.memory import MemoryStorage
 from google import genai
 from google.genai.errors import APIError
+from aiohttp import web
 
 # Загрузка переменных окружения из .env (для локального запуска)
 load_dotenv()
 
 # ==================== НАСТРОЙКИ ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8765783561:AAGKmXHCVUW-yhagVFKb8pG0DtDutZIsqTo")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "728208208"))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 GEMINI_KEY = os.getenv("GEMINI_KEY")
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "Koblenz Events")
 # ===================================================
@@ -55,7 +56,7 @@ PROMPT_TEMPLATE = """
 """
 
 async def generate_with_retry(prompt: str):
-    models_to_try = ['gemini-3.6-flash', 'gemini-3.1-pro-preview']
+    models_to_try = ['gemini-2.5-flash', 'gemini-2.5-pro']
     last_error_msg = ""
 
     for model_name in models_to_try:
@@ -144,7 +145,7 @@ async def save_to_sheets(callback: CallbackQuery):
             "",                              # icon_url
             data.get("start_date", "") or "",
             data.get("start_time", "") or "",
-            data.get("end_time", "") or "",  # end_time теперь корректно на своем месте
+            data.get("end_time", "") or "",  # end_time
             data.get("location_name", "") or "",
             data.get("location_address", "") or "",
             data.get("price_min") if data.get("price_min") is not None else 0,
@@ -169,5 +170,22 @@ async def cancel_save(callback: CallbackQuery):
         del pending_events[user_id]
     await callback.message.edit_text("Действие отменено.")
 
+# ==================== WEB SERVER ДЛЯ RENDER FREE TIER ====================
+async def handle_healthcheck(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_healthcheck)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+async def main():
+    await start_web_server()
+    await dp.start_polling(bot)
+
 if __name__ == "__main__":
-    asyncio.run(dp.start_polling(bot))
+    asyncio.run(main())

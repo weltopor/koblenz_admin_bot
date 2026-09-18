@@ -1,5 +1,6 @@
-aiogram==3.4.1
-google-generativeai
+aiogram==3.15.0
+google-genai
 gspread
-oauth2client
+google-auth
 python-dotenv
+aiohttp
