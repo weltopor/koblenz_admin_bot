@@ -56,7 +56,7 @@ PROMPT_TEMPLATE = """
 """
 
 async def generate_with_retry(prompt: str):
-    models_to_try = ['gemini-2.5-flash', 'gemini-2.5-pro']
+    models_to_try = ['gemini-3.6-flash', 'gemini-3.1-pro-preview']
     last_error_msg = ""
 
     for model_name in models_to_try:
@@ -79,6 +79,8 @@ async def generate_with_retry(prompt: str):
                 break
 
     raise Exception(f"Не удалось получить ответ от Gemini. Детали: {last_error_msg}")
+
+
 
 @dp.message(F.from_user.id == ADMIN_ID)
 async def handle_announcement(message: types.Message):
