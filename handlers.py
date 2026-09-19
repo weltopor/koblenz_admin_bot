@@ -2,19 +2,51 @@ import json
 import re
 from datetime import datetime
 from aiogram import types, F
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BotCommand
 from config import dp, sheet, ADMIN_ID, pending_events
 from ai_service import get_prompt, generate_with_retry
 
-@dp.message(F.from_user.id == ADMIN_ID, F.text.in_(["/list", "/events"]))
+# Функция для настройки кнопки "Menu" в Telegram
+async def set_bot_commands(bot):
+    commands = [
+        BotCommand(command="list", description="📋 Показать будущие мероприятия"),
+        BotCommand(command="help", description="📖 Справка по командам и использованию")
+    ]
+    await bot.set_my_commands(commands)
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "/help")
+async def help_command(message: types.Message):
+    help_text = (
+        "📖 **Справка по управлению ботом:**\n\n"
+        "1️⃣ **Добавление мероприятия:**\n"
+        "Просто отправьте текст анонса в чат. Бот распознает данные через ИИ, покажет превью, после чего вы сможете сохранить их в таблицу.\n\n"
+        "2️⃣ **Просмотр мероприятий:**\n"
+        "• `/list` — показать все будущие активные мероприятия.\n"
+        "• `/events` — то же самое.\n"
+        "• `/list ДД.ММ.ГГГГ` (например, `/list 25.09.2026`) — показать события на конкретный день.\n\n"
+        "3️⃣ **Удаление/деактивация:**\n"
+        "• `/delete [ID]` (например, `/delete 5`) — переведет статус мероприятия с ID 5 в `inactive`."
+    )
+    await message.answer(help_text, parse_mode="Markdown")
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text.regexp(r"^/(list|events)(?:\s+(\d{2}\.\d{2}\.\d{4}))?$"))
 async def list_events_command(message: types.Message):
     try:
+        args = message.text.split()
+        target_date_filter = args[1] if len(args) > 1 else None
+
         records = sheet.get_all_records()
         if not records:
             await message.answer("📭 В таблице пока нет мероприятий.")
             return
 
-        text = "📋 **Список мероприятий в базе:**\n\n"
+        now = datetime.now()
+        current_date = now.date()
+
+        text = "📋 **Список актуальных мероприятий:**\n\n"
+        if target_date_filter:
+            text = f"📋 **Мероприятия на дату {target_date_filter}:**\n\n"
+
         count = 0
         
         for idx, row in enumerate(records, start=2):
@@ -22,12 +54,24 @@ async def list_events_command(message: types.Message):
             if status == "inactive":
                 continue
                 
+            event_date_str = str(row.get("start_date", "")).strip()
+            
+            if not target_date_filter:
+                try:
+                    event_date = datetime.strptime(event_date_str, "%d.%m.%Y").date()
+                    if event_date < current_date:
+                        continue 
+                except ValueError:
+                    pass 
+            else:
+                if event_date_str != target_date_filter:
+                    continue
+
             event_id = row.get("id", idx - 1)
             title = row.get("title", "Без названия")
-            date = row.get("start_date", "Дата не указана")
             organizer_id = row.get("organizer_id", "-")
             
-            text += f"🆔 **ID: {event_id}** | 📅 {date}\n📌 **{title}** (Орг. ID: {organizer_id})\n➖➖➖➖➖➖➖➖➖➖\n"
+            text += f"🆔 **ID: {event_id}** | 📅 {event_date_str}\n📌 **{title}** (Орг. ID: {organizer_id})\n➖➖➖➖➖➖➖➖➖➖\n"
             count += 1
             
             if len(text) > 3500:
@@ -35,9 +79,12 @@ async def list_events_command(message: types.Message):
                 text = ""
 
         if count == 0:
-            await message.answer("📭 Активных мероприятий не найдено.")
+            if target_date_filter:
+                await message.answer(f"📭 На дату {target_date_filter} активных мероприятий не найдено.")
+            else:
+                await message.answer("📭 В базе нет будущих активных мероприятий (все уже прошли).")
         else:
-            text += f"\n💡 Чтобы удалить мероприятие, отправьте команду:\n`/delete [ID]`"
+            text += f"\n💡 Чтобы удалить/деактивировать мероприятие, отправьте:\n`/delete [ID]`"
             await message.answer(text, parse_mode="Markdown")
 
     except Exception as err:

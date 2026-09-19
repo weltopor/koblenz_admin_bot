@@ -2,7 +2,7 @@ import os
 import asyncio
 from aiohttp import web
 from config import bot, dp
-import handlers  # Импортируем хэндлеры, чтобы они зарегистрировались в диспетчере
+import handlers  # Импортируем хэндлеры
 
 async def handle_healthcheck(request):
     return web.Response(text="Bot is running!")
@@ -17,6 +17,9 @@ async def start_web_server():
     await site.start()
 
 async def main():
+    # Устанавливаем кнопку меню с командами в Telegram
+    await handlers.set_bot_commands(bot)
+    
     await start_web_server()
     await dp.start_polling(bot)
 
