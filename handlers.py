@@ -1,36 +1,40 @@
 import os
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from aiogram.types.web_app_info import WebAppInfo
 import json
 import re
 from datetime import datetime
 from aiogram import types, F
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BotCommand
+from aiogram.filters import Command
+from aiogram.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types.web_app_info import WebAppInfo
 from config import dp, sheet, ADMIN_ID, pending_events
 from ai_service import get_prompt, generate_with_retry
 
 
 async def set_bot_commands(bot):
     commands = [
-        BotCommand(command="add", description="➕ Ручной ввод (Mini App)"),
+        BotCommand(command="add", description="➕ Открыть админ-панель (Mini App)"),
         BotCommand(command="list", description="📋 Показать будущие мероприятия"),
         BotCommand(command="help", description="📖 Справка по командам и использованию")
     ]
     await bot.set_my_commands(commands)
+
 
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "/help")
 async def help_command(message: types.Message):
     help_text = (
         "📖 **Справка по управлению ботом:**\n\n"
         "1️⃣ **Добавление мероприятия:**\n"
-        "Отправьте текст анонса в чат. Бот распознает данные, покажет превью, после чего их можно будет сохранить.\n\n"
+        "• Отправьте команду `/add`, чтобы открыть защищенную панель входа и Mini App с выбором тем оформления.\n"
+        "• Или отправьте текст анонса в чат — ИИ распознает его автоматически.\n\n"
         "2️⃣ **Просмотр мероприятий:**\n"
         "• `/list` или `/events` — показать будущие активные мероприятия.\n"
-        "• `/list ДД.ММ.ГГГГ` (или ДД.ММ.ГГ) — показать события на конкретный день.\n\n"
+        "• `/list ДД.ММ.ГГГГ` — показать события на конкретный день.\n\n"
         "3️⃣ **Деактивация:**\n"
         "• `/delete [ID]` — переведет статус мероприятия в `inactive`."
     )
     await message.answer(help_text, parse_mode="Markdown")
+
 
 @dp.message(F.from_user.id == ADMIN_ID, F.text.regexp(r"^/(list|events)(?:\s+(\d{2}\.\d{2}\.(?:\d{4}|\d{2}))?)?$"))
 async def list_events_command(message: types.Message):
@@ -97,6 +101,7 @@ async def list_events_command(message: types.Message):
     except Exception as err:
         await message.answer(f"❌ Ошибка при чтении таблицы: {err}")
 
+
 @dp.message(F.from_user.id == ADMIN_ID, F.text.startswith("/delete"))
 async def delete_event_by_id(message: types.Message):
     parts = message.text.split()
@@ -125,26 +130,24 @@ async def delete_event_by_id(message: types.Message):
     except Exception as err:
         await message.answer(f"❌ Ошибка при удалении: {err}")
 
+
 @dp.message(F.from_user.id == ADMIN_ID, F.text == "/add")
 async def add_via_webapp(message: types.Message):
-    # Render автоматически задает эту переменную. Если её нет, выдаст ошибку.
     render_url = os.getenv("RENDER_EXTERNAL_URL")
     if not render_url:
         await message.answer("⚠️ Ошибка: бот не может найти свой веб-адрес на Render.")
         return
 
-    # Создаем кнопку, которая открывает нашу HTML-форму
     web_app = WebAppInfo(url=f"{render_url}/form")
     keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📝 Открыть форму", web_app=web_app)]],
+        keyboard=[[KeyboardButton(text="🔐 Открыть панель входа", web_app=web_app)]],
         resize_keyboard=True
     )
-    await message.answer("Нажмите на кнопку ниже, чтобы открыть карточку ручного ввода:", reply_markup=keyboard)
+    await message.answer("Нажмите на кнопку ниже, чтобы открыть панель авторизации:", reply_markup=keyboard)
 
 
 @dp.message(F.from_user.id == ADMIN_ID, F.web_app_data)
 async def web_app_data_handler(message: types.Message):
-    # Когда вы нажимаете "Отправить" в Mini App, данные приходят сюда
     data_str = message.web_app_data.data
     try:
         data = json.loads(data_str)
@@ -168,13 +171,12 @@ async def web_app_data_handler(message: types.Message):
             [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_event")]
         ])
         
-        # Убираем огромную кнопку "Открыть форму"
         await message.answer("Форма закрыта.", reply_markup=ReplyKeyboardRemove())
-        # Показываем превью с кнопкой сохранения
         await message.answer(preview_text, parse_mode="Markdown", reply_markup=keyboard)
         
     except Exception as e:
         await message.answer(f"❌ Ошибка обработки данных формы: {e}")
+
 
 @dp.message(F.from_user.id == ADMIN_ID)
 async def handle_announcement(message: types.Message):
@@ -267,6 +269,7 @@ async def handle_announcement(message: types.Message):
     except Exception as err:
         await status_msg.edit_text(f"❌ Ошибка при обработке: {err}")
 
+
 @dp.callback_query(F.data == "edit_event")
 async def edit_event_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -274,6 +277,7 @@ async def edit_event_callback(callback: CallbackQuery):
         pending_events[user_id]["waiting_for_edit"] = True
         await callback.message.answer("✍️ Напишите текстом, что именно нужно исправить или изменить:")
     await callback.answer()
+
 
 @dp.callback_query(F.data == "save_event")
 async def save_to_sheets(callback: CallbackQuery):
@@ -316,6 +320,7 @@ async def save_to_sheets(callback: CallbackQuery):
 
     except Exception as err:
         await callback.message.edit_text(f"❌ Ошибка записи в таблицу: {err}")
+
 
 @dp.callback_query(F.data == "cancel_event")
 async def cancel_save(callback: CallbackQuery):
