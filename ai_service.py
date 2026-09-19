@@ -26,7 +26,6 @@ def get_prompt(current_date_str: str) -> str:
 """
 
 async def generate_with_retry(prompt: str):
-    # Используем корректную актуальную модель с поддержкой длинных текстов
     models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash']
     last_error_msg = ""
 
