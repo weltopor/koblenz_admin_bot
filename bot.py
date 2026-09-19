@@ -2,6 +2,7 @@ import os
 import json
 import re
 import asyncio
+from datetime import datetime
 import gspread
 from dotenv import load_dotenv
 from oauth2client.service_account import ServiceAccountCredentials
@@ -34,10 +35,11 @@ dp = Dispatcher(storage=MemoryStorage())
 
 pending_events = {}
 
-PROMPT_TEMPLATE = """
-Ты — ассистент базы данных событий города Кобленц. 
+def get_prompt(current_date_str: str) -> str:
+    return f"""
+Ты — ассистент базы данных событий города Кобленц. Текущая дата: {current_date_str}.
 Распарси текст анонса мероприятия и верни ТОЛЬКО валидный JSON-объект без лишних слов со следующей структурой:
-{
+{{
   "title": "Название мероприятия",
   "description": "Краткое описание",
   "start_date": "DD.MM.YYYY",
@@ -48,9 +50,10 @@ PROMPT_TEMPLATE = """
   "price_min": 0.00,
   "price_max": 0.00,
   "category_id": "Укажи только цифру ID от 1 до 11 из списка: [1-Food & Drink, 2-Music & Nightlife, 3-Culture & Art, 4-Tours & Sightseeing, 5-Sport & Fitness, 6-Nature & Adventure, 7-Wellness & Spa, 8-Family & Kids, 9-Markets & Shopping, 10-Community & Social, 11-Charity & Eco]",
+  "organizer_id": "Укажи только цифру ID организатора из списка или null, если организатор не указан: [1-Weingut Schwaab, 2-Cafe Hahn GmbH, 3-Weingut Spurzem, 4-Koblenz-Touristik GmbH, 5-ARTogether Koblenz, 6-Jana Morjan & Dieter Eberle GbR, 7-Club Europe Ltd, 8-Forum Mittelrhein Koblenz, 9-Eifelblock Koblenz, 10-Kulturzentrum Festung Ehrenbreitstein, 11-Eigenbetrieb der Stadt Koblenz Grünflächen- und Bestattungswesen, 12-Koblenzer Sektmuseum, 13-Yoga mit Dorothe Struschka, 14-Green Office Uni Koblenz, 15-Rhein-Museum Koblenz e. V., 16-Elterninitiative krebskranker Kinder Koblenz e. V., 17-Villa Musica, 18-Landesbibliothekszentrum Rheinland-Pfalz, 19-Djangos Erben, 20-Ludwig Museum, 21-Pride+ und Pride-Zeit, 22-Gleichstellungsstelle der Stadt Koblenz und StadtBibliothek, 23-Music Live e.V Koblenz, 24-Mittelrheinmuseum Koblenz, 25-Mosellum, 26-Rhein-Mosel-Halle, 27-Gilles Personenschifffahrt GmbH, 28-Club Nova Koblenz, 29-Köln-Düsseldorfer Deutsche Rheinschiffahrt GmbH]",
   "additional_info": "Дополнительная информация или контакты"
-}
-Если какое-то поле не удается определить, укажи null.
+}}
+Если в тексте написано "завтра", "сегодня", "в пятницу" или указана дата без года, рассчитывай её строго относительно текущей даты: {current_date_str}. Если какое-то поле не удается определить, укажи null.
 
 Текст анонса:
 """
@@ -80,10 +83,54 @@ async def generate_with_retry(prompt: str):
 
     raise Exception(f"Не удалось получить ответ от Gemini. Детали: {last_error_msg}")
 
-
-
 @dp.message(F.from_user.id == ADMIN_ID)
 async def handle_announcement(message: types.Message):
+    user_id = message.from_user.id
+
+    # Проверка: если бот ждет текст правок для редактирования карточки
+    if user_id in pending_events and pending_events[user_id].get("waiting_for_edit"):
+        status_msg = await message.answer("🔄 Применяю исправления через Gemini...")
+        try:
+            now = datetime.now()
+            current_date_str = now.strftime("%d.%m.%Y")
+            
+            correction_prompt = (
+                f"Текущая дата: {current_date_str}.\n"
+                f"У нас есть уже распарсенные данные мероприятия:\n{json.dumps(pending_events[user_id]['data'], ensure_ascii=False)}\n\n"
+                f"Пользователь прислал исправления или дополнения: '{message.text}'. "
+                f"Обнови JSON-объект с учетом этих правок (если упоминаются дни вроде 'завтра', рассчитывай от {current_date_str}) и верни ТОЛЬКО валидный JSON в прежнем формате."
+            )
+            
+            response = await generate_with_retry(correction_prompt)
+            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if json_match:
+                new_data = json.loads(json_match.group(0))
+                pending_events[user_id]["data"] = new_data
+                pending_events[user_id]["waiting_for_edit"] = False
+
+                end_time_str = f" до {new_data.get('end_time')}" if new_data.get('end_time') else ""
+                preview_text = (
+                    f"📌 **Обновленные данные:**\n\n"
+                    f"**Название:** {new_data.get('title')}\n"
+                    f"**Дата и время:** {new_data.get('start_date')} в {new_data.get('start_time')}{end_time_str}\n"
+                    f"**Место:** {new_data.get('location_name')} ({new_data.get('location_address')})\n"
+                    f"**Цена:** {new_data.get('price_min') or 0} € - {new_data.get('price_max') or 0} €\n"
+                    f"**ID Категории:** {new_data.get('category_id')}\n"
+                    f"**ID Организатора:** {new_data.get('organizer_id')}\n"
+                    f"**Описание:** {new_data.get('description')}\n"
+                    f"**Доп. инфо:** {new_data.get('additional_info')}"
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Сохранить в таблицу", callback_data="save_event")],
+                    [InlineKeyboardButton(text="✏️ Редактировать", callback_data="edit_event")],
+                    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_event")]
+                ])
+                await status_msg.edit_text(preview_text, parse_mode="Markdown", reply_markup=keyboard)
+                return
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Ошибка при внесении правок: {e}")
+            return
+
     if not message.text:
         await message.answer("Пожалуйста, отправьте текстовый анонс мероприятия.")
         return
@@ -91,15 +138,18 @@ async def handle_announcement(message: types.Message):
     status_msg = await message.answer("🧠 Извлекаю данные через Gemini AI...")
 
     try:
-        response = await generate_with_retry(PROMPT_TEMPLATE + message.text)
+        now = datetime.now()
+        current_date_str = now.strftime("%d.%m.%Y")
+        
+        prompt = get_prompt(current_date_str) + message.text
+        response = await generate_with_retry(prompt)
         json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
         
         if not json_match:
             raise ValueError("Не удалось получить структурированный JSON от модели.")
             
         data = json.loads(json_match.group(0))
-        user_id = message.from_user.id
-        pending_events[user_id] = data
+        pending_events[user_id] = {"data": data, "waiting_for_edit": False}
 
         end_time_str = f" до {data.get('end_time')}" if data.get('end_time') else ""
         preview_text = (
@@ -109,15 +159,15 @@ async def handle_announcement(message: types.Message):
             f"**Место:** {data.get('location_name')} ({data.get('location_address')})\n"
             f"**Цена:** {data.get('price_min') or 0} € - {data.get('price_max') or 0} €\n"
             f"**ID Категории:** {data.get('category_id')}\n"
+            f"**ID Организатора:** {data.get('organizer_id')}\n"
             f"**Описание:** {data.get('description')}\n"
             f"**Доп. инфо:** {data.get('additional_info')}"
         )
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Сохранить в таблицу", callback_data="save_event"),
-                InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_event")
-            ]
+            [InlineKeyboardButton(text="✅ Сохранить в таблицу", callback_data="save_event")],
+            [InlineKeyboardButton(text="✏️ Редактировать", callback_data="edit_event")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_event")]
         ])
 
         await status_msg.edit_text(preview_text, parse_mode="Markdown", reply_markup=keyboard)
@@ -125,37 +175,47 @@ async def handle_announcement(message: types.Message):
     except Exception as err:
         await status_msg.edit_text(f"❌ Ошибка при обработке: {err}")
 
+@dp.callback_query(F.data == "edit_event")
+async def edit_event_callback(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id in pending_events:
+        pending_events[user_id]["waiting_for_edit"] = True
+        await callback.message.answer("✍️ Напишите текстом, что именно нужно исправить или изменить (например: *'Измени название на Джазовый вечер и дату на завтра'*):")
+    await callback.answer()
+
 @dp.callback_query(F.data == "save_event")
 async def save_to_sheets(callback: CallbackQuery):
     user_id = callback.from_user.id
-    data = pending_events.get(user_id)
+    user_session = pending_events.get(user_id)
 
-    if not data:
+    if not user_session or not user_session.get("data"):
         await callback.message.edit_text("❌ Данные не найдены или сессия истекла.")
         return
+
+    data = user_session["data"]
 
     try:
         records = sheet.get_all_records()
         next_id = len(records) + 1
 
         row = [
-            next_id,                         # id
-            "active",                        # status
-            "FALSE",                         # featured
+            next_id,                        # id
+            "active",                       # status
+            "FALSE",                        # featured
             data.get("title", "") or "",
             data.get("description", "") or "",
-            "",                              # icon_url
+            "",                             # icon_url
             data.get("start_date", "") or "",
             data.get("start_time", "") or "",
-            data.get("end_time", "") or "",  # end_time
+            data.get("end_time", "") or "", # end_time
             data.get("location_name", "") or "",
             data.get("location_address", "") or "",
             data.get("price_min") if data.get("price_min") is not None else 0,
             data.get("price_max") if data.get("price_max") is not None else 0,
-            "",                              # ticket_link
+            "",                             # ticket_link
             data.get("additional_info", "") or "",
             data.get("category_id", "") or "",
-            ""                               # organizer_id
+            data.get("organizer_id", "") or "" # organizer_id
         ]
 
         sheet.append_row(row)
