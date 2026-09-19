@@ -21,7 +21,6 @@ FORM_HTML = """
             --btn-text: #0f172a;
         }
 
-        /* Темы оформления (Варианты под ваше настроение) */
         body.theme-1 { --bg-color: #0b0f19; --card-bg: #131b2e; --accent: #6366f1; --btn-text: #fff; }
         body.theme-2 { --bg-color: #f8fafc; --text-color: #0f172a; --card-bg: #ffffff; --accent: #0284c7; --btn-text: #fff; }
         body.theme-3 { --bg-color: #fdf6e2; --text-color: #433422; --card-bg: #faedcd; --accent: #dda15e; --btn-text: #283618; }
@@ -56,7 +55,6 @@ FORM_HTML = """
             <h3 style="margin:0;">✨ Выберите стиль</h3>
         </div>
         
-        <!-- Переключатель вариантов дизайна -->
         <div class="theme-selector">
             <button class="theme-btn" style="background:#0b0f19;" onclick="setTheme('theme-1')"></button>
             <button class="theme-btn" style="background:#f8fafc;" onclick="setTheme('theme-2')"></button>
@@ -118,7 +116,6 @@ FORM_HTML = """
             localStorage.setItem('selected_theme', themeName);
         }
 
-        // Восстанавливаем тему при повторном открытии
         let savedTheme = localStorage.getItem('selected_theme');
         if (savedTheme) {
             document.body.className = savedTheme;
@@ -173,6 +170,10 @@ async def start_web_server():
 async def main():
     await handlers.set_bot_commands(bot)
     await start_web_server()
+    
+    # Сбрасываем старый вебхук и зависшие соединения
+    await bot.delete_webhook(drop_pending_updates=True)
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
