@@ -5,7 +5,6 @@ from datetime import datetime
 from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.types.web_app_info import WebAppInfo
 from config import dp, sheet, ADMIN_ID, pending_events
 from ai_service import get_prompt, generate_with_retry
@@ -13,7 +12,7 @@ from ai_service import get_prompt, generate_with_retry
 
 async def set_bot_commands(bot):
     commands = [
-        BotCommand(command="add", description="➕ Открыть админ-панель (Mini App)"),
+        BotCommand(command="add", description="➕ Открыть Mini App (панель)"),
         BotCommand(command="list", description="📋 Показать будущие мероприятия"),
         BotCommand(command="help", description="📖 Справка по командам и использованию")
     ]
@@ -25,7 +24,7 @@ async def help_command(message: types.Message):
     help_text = (
         "📖 **Справка по управлению ботом:**\n\n"
         "1️⃣ **Добавление мероприятия:**\n"
-        "• Отправьте команду `/add`, чтобы открыть защищенную панель входа и Mini App с выбором тем оформления.\n"
+        "• Отправьте команду `/add`, чтобы открыть Mini App через удобную inline-кнопку.\n"
         "• Или отправьте текст анонса в чат — ИИ распознает его автоматически.\n\n"
         "2️⃣ **Просмотр мероприятий:**\n"
         "• `/list` или `/events` — показать будущие активные мероприятия.\n"
@@ -138,12 +137,14 @@ async def add_via_webapp(message: types.Message):
         await message.answer("⚠️ Ошибка: бот не может найти свой веб-адрес на Render.")
         return
 
+    # Используем Inline-кнопку для открытия Mini App под сообщением
     web_app = WebAppInfo(url=f"{render_url}/form")
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="🔐 Открыть панель входа", web_app=web_app)]],
-        resize_keyboard=True
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Открыть Mini App", web_app=web_app)]
+        ]
     )
-    await message.answer("Нажмите на кнопку ниже, чтобы открыть панель авторизации:", reply_markup=keyboard)
+    await message.answer("Нажмите на кнопку ниже, чтобы открыть панель управления в Mini App:", reply_markup=keyboard)
 
 
 @dp.message(F.from_user.id == ADMIN_ID, F.web_app_data)
@@ -171,7 +172,6 @@ async def web_app_data_handler(message: types.Message):
             [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_event")]
         ])
         
-        await message.answer("Форма закрыта.", reply_markup=ReplyKeyboardRemove())
         await message.answer(preview_text, parse_mode="Markdown", reply_markup=keyboard)
         
     except Exception as e:
