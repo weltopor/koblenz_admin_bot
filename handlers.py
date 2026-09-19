@@ -1,0 +1,220 @@
+import json
+import re
+from datetime import datetime
+from aiogram import types, F
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from config import dp, sheet, ADMIN_ID, pending_events
+from ai_service import get_prompt, generate_with_retry
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text.in_(["/list", "/events"]))
+async def list_events_command(message: types.Message):
+    try:
+        records = sheet.get_all_records()
+        if not records:
+            await message.answer("📭 В таблице пока нет мероприятий.")
+            return
+
+        text = "📋 **Список мероприятий в базе:**\n\n"
+        count = 0
+        
+        for idx, row in enumerate(records, start=2):
+            status = str(row.get("status", "active")).lower()
+            if status == "inactive":
+                continue
+                
+            event_id = row.get("id", idx - 1)
+            title = row.get("title", "Без названия")
+            date = row.get("start_date", "Дата не указана")
+            organizer_id = row.get("organizer_id", "-")
+            
+            text += f"🆔 **ID: {event_id}** | 📅 {date}\n📌 **{title}** (Орг. ID: {organizer_id})\n➖➖➖➖➖➖➖➖➖➖\n"
+            count += 1
+            
+            if len(text) > 3500:
+                await message.answer(text, parse_mode="Markdown")
+                text = ""
+
+        if count == 0:
+            await message.answer("📭 Активных мероприятий не найдено.")
+        else:
+            text += f"\n💡 Чтобы удалить мероприятие, отправьте команду:\n`/delete [ID]`"
+            await message.answer(text, parse_mode="Markdown")
+
+    except Exception as err:
+        await message.answer(f"❌ Ошибка при чтении таблицы: {err}")
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text.startswith("/delete"))
+async def delete_event_by_id(message: types.Message):
+    parts = message.text.split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("⚠️ Укажите ID мероприятия числом.\nПример: `/delete 3`", parse_mode="Markdown")
+        return
+
+    target_id = int(parts[1])
+
+    try:
+        records = sheet.get_all_records()
+        row_to_update = None
+        
+        for idx, row in enumerate(records, start=2):
+            if int(row.get("id", 0)) == target_id:
+                row_to_update = idx
+                break
+
+        if not row_to_update:
+            await message.answer(f"❌ Мероприятие с ID **{target_id}** не найдено в таблице.", parse_mode="Markdown")
+            return
+
+        sheet.update_cell(row_to_update, 2, "inactive")
+        await message.answer(f"✅ Мероприятие с ID **{target_id}** успешно помечено как неактивное (`inactive`).", parse_mode="Markdown")
+
+    except Exception as err:
+        await message.answer(f"❌ Ошибка при удалении: {err}")
+
+@dp.message(F.from_user.id == ADMIN_ID)
+async def handle_announcement(message: types.Message):
+    user_id = message.from_user.id
+
+    if user_id in pending_events and pending_events[user_id].get("waiting_for_edit"):
+        status_msg = await message.answer("🔄 Применяю исправления через Gemini...")
+        try:
+            now = datetime.now()
+            current_date_str = now.strftime("%d.%m.%Y")
+            
+            correction_prompt = (
+                f"Текущая дата: {current_date_str}.\n"
+                f"У нас есть уже распарсенные данные мероприятия:\n{json.dumps(pending_events[user_id]['data'], ensure_ascii=False)}\n\n"
+                f"Пользователь прислал исправления или дополнения: '{message.text}'. "
+                f"Обнови JSON-объект с учетом этих правок (если упоминаются дни вроде 'завтра', рассчитывай от {current_date_str}) и верни ТОЛЬКО валидный JSON в прежнем формате."
+            )
+            
+            response = await generate_with_retry(correction_prompt)
+            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if json_match:
+                new_data = json.loads(json_match.group(0))
+                pending_events[user_id]["data"] = new_data
+                pending_events[user_id]["waiting_for_edit"] = False
+
+                end_time_str = f" до {new_data.get('end_time')}" if new_data.get('end_time') else ""
+                preview_text = (
+                    f"📌 **Обновленные данные:**\n\n"
+                    f"**Название:** {new_data.get('title')}\n"
+                    f"**Дата и время:** {new_data.get('start_date')} в {new_data.get('start_time')}{end_time_str}\n"
+                    f"**Место:** {new_data.get('location_name')} ({new_data.get('location_address')})\n"
+                    f"**Цена:** {new_data.get('price_min') or 0} € - {new_data.get('price_max') or 0} €\n"
+                    f"**ID Категории:** {new_data.get('category_id')}\n"
+                    f"**ID Организатора:** {new_data.get('organizer_id')}\n"
+                    f"**Описание:** {new_data.get('description')}\n"
+                    f"**Доп. инфо:** {new_data.get('additional_info')}"
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Сохранить в таблицу", callback_data="save_event")],
+                    [InlineKeyboardButton(text="✏️ Редактировать", callback_data="edit_event")],
+                    [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_event")]
+                ])
+                await status_msg.edit_text(preview_text, parse_mode="Markdown", reply_markup=keyboard)
+                return
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Ошибка при внесении правок: {e}")
+            return
+
+    if not message.text:
+        await message.answer("Пожалуйста, отправьте текстовый анонс мероприятия.")
+        return
+
+    status_msg = await message.answer("🧠 Извлекаю данные через Gemini AI...")
+
+    try:
+        now = datetime.now()
+        current_date_str = now.strftime("%d.%m.%Y")
+        
+        prompt = get_prompt(current_date_str) + message.text
+        response = await generate_with_retry(prompt)
+        json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+        
+        if not json_match:
+            raise ValueError("Не удалось получить структурированный JSON от модели.")
+            
+        data = json.loads(json_match.group(0))
+        pending_events[user_id] = {"data": data, "waiting_for_edit": False}
+
+        end_time_str = f" до {data.get('end_time')}" if data.get('end_time') else ""
+        preview_text = (
+            f"📌 **Проверьте распарсенные данные:**\n\n"
+            f"**Название:** {data.get('title')}\n"
+            f"**Дата и время:** {data.get('start_date')} в {data.get('start_time')}{end_time_str}\n"
+            f"**Место:** {data.get('location_name')} ({data.get('location_address')})\n"
+            f"**Цена:** {data.get('price_min') or 0} € - {data.get('price_max') or 0} €\n"
+            f"**ID Категории:** {data.get('category_id')}\n"
+            f"**ID Организатора:** {data.get('organizer_id')}\n"
+            f"**Описание:** {data.get('description')}\n"
+            f"**Доп. инфо:** {data.get('additional_info')}"
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Сохранить в таблицу", callback_data="save_event")],
+            [InlineKeyboardButton(text="✏️ Редактировать", callback_data="edit_event")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_event")]
+        ])
+
+        await status_msg.edit_text(preview_text, parse_mode="Markdown", reply_markup=keyboard)
+
+    except Exception as err:
+        await status_msg.edit_text(f"❌ Ошибка при обработке: {err}")
+
+@dp.callback_query(F.data == "edit_event")
+async def edit_event_callback(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id in pending_events:
+        pending_events[user_id]["waiting_for_edit"] = True
+        await callback.message.answer("✍️ Напишите текстом, что именно нужно исправить или изменить:")
+    await callback.answer()
+
+@dp.callback_query(F.data == "save_event")
+async def save_to_sheets(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    user_session = pending_events.get(user_id)
+
+    if not user_session or not user_session.get("data"):
+        await callback.message.edit_text("❌ Данные не найдены или сессия истекла.")
+        return
+
+    data = user_session["data"]
+
+    try:
+        records = sheet.get_all_records()
+        next_id = len(records) + 1
+
+        row = [
+            next_id,
+            "active",
+            "FALSE",
+            data.get("title", "") or "",
+            data.get("description", "") or "",
+            "",
+            data.get("start_date", "") or "",
+            data.get("start_time", "") or "",
+            data.get("end_time", "") or "",
+            data.get("location_name", "") or "",
+            data.get("location_address", "") or "",
+            data.get("price_min") if data.get("price_min") is not None else 0,
+            data.get("price_max") if data.get("price_max") is not None else 0,
+            "",
+            data.get("additional_info", "") or "",
+            data.get("category_id", "") or "",
+            data.get("organizer_id", "") or ""
+        ]
+
+        sheet.append_row(row)
+        del pending_events[user_id]
+        await callback.message.edit_text("🎉 **Событие успешно добавлено в Google Таблицу!**")
+
+    except Exception as err:
+        await callback.message.edit_text(f"❌ Ошибка записи в таблицу: {err}")
+
+@dp.callback_query(F.data == "cancel_event")
+async def cancel_save(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if user_id in pending_events:
+        del pending_events[user_id]
+    await callback.message.edit_text("Действие отменено.")
