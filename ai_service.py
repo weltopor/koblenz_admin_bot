@@ -26,7 +26,8 @@ def get_prompt(current_date_str: str) -> str:
 """
 
 async def generate_with_retry(prompt: str):
-    models_to_try = ['gemini-3.6-flash', 'gemini-3.1-pro-preview']
+    # Используем только надежную flash-модель с гигантским лимитом
+    models_to_try = ['gemini-1.5-flash']
     last_error_msg = ""
 
     for model_name in models_to_try:
@@ -45,7 +46,7 @@ async def generate_with_retry(prompt: str):
                     continue
                 break
             except Exception as e:
-                last_error_msg = f"[{model_name}] Unexpected error: {str(e)}"
+                last_error_msg = f"[{model_name}] Неожиданная ошибка: {str(e)}"
                 break
 
     raise Exception(f"Не удалось получить ответ от Gemini. Детали: {last_error_msg}")

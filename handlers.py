@@ -1,3 +1,6 @@
+import os
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types.web_app_info import WebAppInfo
 import json
 import re
 from datetime import datetime
@@ -6,8 +9,10 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 from config import dp, sheet, ADMIN_ID, pending_events
 from ai_service import get_prompt, generate_with_retry
 
+
 async def set_bot_commands(bot):
     commands = [
+        BotCommand(command="add", description="➕ Ручной ввод (Mini App)"),
         BotCommand(command="list", description="📋 Показать будущие мероприятия"),
         BotCommand(command="help", description="📖 Справка по командам и использованию")
     ]
@@ -119,6 +124,57 @@ async def delete_event_by_id(message: types.Message):
 
     except Exception as err:
         await message.answer(f"❌ Ошибка при удалении: {err}")
+
+@dp.message(F.from_user.id == ADMIN_ID, F.text == "/add")
+async def add_via_webapp(message: types.Message):
+    # Render автоматически задает эту переменную. Если её нет, выдаст ошибку.
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+    if not render_url:
+        await message.answer("⚠️ Ошибка: бот не может найти свой веб-адрес на Render.")
+        return
+
+    # Создаем кнопку, которая открывает нашу HTML-форму
+    web_app = WebAppInfo(url=f"{render_url}/form")
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📝 Открыть форму", web_app=web_app)]],
+        resize_keyboard=True
+    )
+    await message.answer("Нажмите на кнопку ниже, чтобы открыть карточку ручного ввода:", reply_markup=keyboard)
+
+
+@dp.message(F.from_user.id == ADMIN_ID, F.web_app_data)
+async def web_app_data_handler(message: types.Message):
+    # Когда вы нажимаете "Отправить" в Mini App, данные приходят сюда
+    data_str = message.web_app_data.data
+    try:
+        data = json.loads(data_str)
+        user_id = message.from_user.id
+        
+        pending_events[user_id] = {"data": data, "waiting_for_edit": False}
+        
+        end_time_str = f" до {data.get('end_time')}" if data.get('end_time') else ""
+        preview_text = (
+            f"📌 **Данные из Mini App получены:**\n\n"
+            f"**Название:** {data.get('title')}\n"
+            f"**Дата и время:** {data.get('start_date')} в {data.get('start_time')}{end_time_str}\n"
+            f"**Место:** {data.get('location_name')}\n"
+            f"**Цена:** {data.get('price_min')} € - {data.get('price_max')} €\n"
+            f"**Категория (ID):** {data.get('category_id')}\n"
+            f"**Описание:** {data.get('description')}"
+        )
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Сохранить в таблицу", callback_data="save_event")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_event")]
+        ])
+        
+        # Убираем огромную кнопку "Открыть форму"
+        await message.answer("Форма закрыта.", reply_markup=ReplyKeyboardRemove())
+        # Показываем превью с кнопкой сохранения
+        await message.answer(preview_text, parse_mode="Markdown", reply_markup=keyboard)
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка обработки данных формы: {e}")
 
 @dp.message(F.from_user.id == ADMIN_ID)
 async def handle_announcement(message: types.Message):
