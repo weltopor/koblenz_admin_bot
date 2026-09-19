@@ -25,9 +25,7 @@ def get_prompt(current_date_str: str) -> str:
 Текст анонса:
 """
 
-
 async def generate_with_retry(prompt: str):
-    # Ставим flash первой, так как у нее выше бесплатные лимиты (quota)
     models_to_try = ['gemini-3.6-flash', 'gemini-3.1-pro-preview']
     last_error_msg = ""
 
@@ -41,7 +39,6 @@ async def generate_with_retry(prompt: str):
                     return response
             except APIError as e:
                 last_error_msg = f"[{model_name}] APIError {e.code}: {e.message}"
-                # Если уперлись в лимит (429) или ошибка сервера (503), пробуем еще раз с задержкой
                 if e.code in (503, 429) and attempt < 2:
                     await asyncio.sleep(delay)
                     delay *= 2

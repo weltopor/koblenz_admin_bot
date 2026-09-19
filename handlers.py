@@ -6,7 +6,6 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 from config import dp, sheet, ADMIN_ID, pending_events
 from ai_service import get_prompt, generate_with_retry
 
-# Функция для настройки кнопки "Menu" в Telegram
 async def set_bot_commands(bot):
     commands = [
         BotCommand(command="list", description="📋 Показать будущие мероприятия"),
@@ -19,21 +18,24 @@ async def help_command(message: types.Message):
     help_text = (
         "📖 **Справка по управлению ботом:**\n\n"
         "1️⃣ **Добавление мероприятия:**\n"
-        "Просто отправьте текст анонса в чат. Бот распознает данные через ИИ, покажет превью, после чего вы сможете сохранить их в таблицу.\n\n"
+        "Отправьте текст анонса в чат. Бот распознает данные, покажет превью, после чего их можно будет сохранить.\n\n"
         "2️⃣ **Просмотр мероприятий:**\n"
-        "• `/list` — показать все будущие активные мероприятия.\n"
-        "• `/events` — то же самое.\n"
-        "• `/list ДД.ММ.ГГГГ` (например, `/list 25.09.2026`) — показать события на конкретный день.\n\n"
-        "3️⃣ **Удаление/деактивация:**\n"
-        "• `/delete [ID]` (например, `/delete 5`) — переведет статус мероприятия с ID 5 в `inactive`."
+        "• `/list` или `/events` — показать будущие активные мероприятия.\n"
+        "• `/list ДД.ММ.ГГГГ` (или ДД.ММ.ГГ) — показать события на конкретный день.\n\n"
+        "3️⃣ **Деактивация:**\n"
+        "• `/delete [ID]` — переведет статус мероприятия в `inactive`."
     )
     await message.answer(help_text, parse_mode="Markdown")
 
-@dp.message(F.from_user.id == ADMIN_ID, F.text.regexp(r"^/(list|events)(?:\s+(\d{2}\.\d{2}\.\d{4}))?$"))
+@dp.message(F.from_user.id == ADMIN_ID, F.text.regexp(r"^/(list|events)(?:\s+(\d{2}\.\d{2}\.(?:\d{4}|\d{2}))?)?$"))
 async def list_events_command(message: types.Message):
     try:
         args = message.text.split()
         target_date_filter = args[1] if len(args) > 1 else None
+
+        if target_date_filter and len(target_date_filter.split(".")[2]) == 2:
+            day, month, year = target_date_filter.split(".")
+            target_date_filter = f"{day}.{month}.20{year}"
 
         records = sheet.get_all_records()
         if not records:
@@ -132,7 +134,7 @@ async def handle_announcement(message: types.Message):
                 f"Текущая дата: {current_date_str}.\n"
                 f"У нас есть уже распарсенные данные мероприятия:\n{json.dumps(pending_events[user_id]['data'], ensure_ascii=False)}\n\n"
                 f"Пользователь прислал исправления или дополнения: '{message.text}'. "
-                f"Обнови JSON-объект с учетом этих правок (если упоминаются дни вроде 'завтра', рассчитывай от {current_date_str}) и верни ТОЛЬКО валидный JSON в прежнем формате."
+                f"Обнови JSON-объект с учетом этих правок и верни ТОЛЬКО валидный JSON в прежнем формате."
             )
             
             response = await generate_with_retry(correction_prompt)
