@@ -26,7 +26,8 @@ def get_prompt(current_date_str: str) -> str:
 """
 
 async def generate_with_retry(prompt: str):
-    models_to_try = ['gemini-2.5-flash', 'gemini-2.0-flash']
+    # Обновлен список актуальных моделей на смену устаревшим
+    models_to_try = ['gemini-2.5-flash', 'gemini-3.5-flash']
     last_error_msg = ""
 
     for model_name in models_to_try:
